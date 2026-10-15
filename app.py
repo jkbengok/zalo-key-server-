@@ -1,89 +1,67 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import hashlib
 import time
 import os
-import requests
 
 app = Flask(__name__)
 
 # ==================== CẤU HÌNH ====================
-LINK4M_API_KEY = "683722d2cb3cec434a49f527"
-SECRET = "mot_chuoi_bi_mat_cua_ban"          # Đổi thành chuỗi bất kỳ của bạn
-KEY_EXPIRE_HOURS = 24                        # Key sống bao nhiêu giờ
+ADMIN_PASSWORD = "hoang123"          # Đổi mật khẩu này
+DEFAULT_HOURS = 24
 # ==================================================
 
 keys = {}
 
-def generate_key(user_id=""):
-    raw = f"{user_id}{SECRET}{int(time.time())}"
+def generate_key():
+    raw = f"{time.time()}{os.urandom(8).hex()}"
     return hashlib.md5(raw.encode()).hexdigest()[:12].upper()
 
 @app.route("/")
 def home():
     return "Server key đang chạy"
 
-# Tạo link lấy key
-@app.route("/get-link", methods=["GET"])
-def get_link():
-    user_id = request.args.get("uid", "guest")
-    key = generate_key(user_id)
-    expire = int(time.time()) + KEY_EXPIRE_HOURS * 3600
-    keys[key] = {"expire": expire, "uid": user_id}
+# Trang admin tạo key thủ công
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    if request.method == "POST":
+        password = request.form.get("password")
+        if password != ADMIN_PASSWORD:
+            return "Sai mật khẩu"
 
-    # Link đích sẽ hiện key
-    target = request.host_url.rstrip("/") + f"/show-key?key={key}"
-    
-    try:
-        r = requests.get(
-            "https://link4m.co/st",
-            params={"api": LINK4M_API_KEY, "url": target},
-            timeout=10
-        )
-        data = r.json()
-        short = data.get("shortenedUrl") or data.get("url") or target
-    except Exception as e:
-        short = target
-        print("Lỗi tạo link4m:", e)
+        hours = int(request.form.get("hours", DEFAULT_HOURS))
+        key = generate_key()
+        expire = int(time.time()) + hours * 3600
+        keys[key] = {"expire": expire, "hours": hours}
 
-    return jsonify({
-        "status": "success",
-        "key": key,
-        "link": short,
-        "expire_hours": KEY_EXPIRE_HOURS
-    })
-
-# Trang hiện key sau khi vượt link4m
-@app.route("/show-key")
-def show_key():
-    key = request.args.get("key")
-    if key in keys and keys[key]["expire"] > time.time():
         return f"""
-        <html>
-        <body style="font-family: Arial; text-align: center; padding: 50px;">
-            <h2>Key của bạn:</h2>
-            <h1 style="color: #e74c3c;">{key}</h1>
-            <p>Hết hạn sau {KEY_EXPIRE_HOURS} giờ</p>
-            <p>Copy key này rồi dán vào bot</p>
-        </body>
-        </html>
+        <h2>Đã tạo key thành công</h2>
+        <h1 style="color:red">{key}</h1>
+        <p>Thời hạn: {hours} giờ</p>
+        <a href="/admin">Tạo key khác</a>
         """
-    return "<h3>Key không hợp lệ hoặc đã hết hạn</h3>"
 
-# Bot gọi vào đây để kiểm tra key
-@app.route("/check-key", methods=["GET", "POST"])
+    return '''
+    <form method="post">
+        <h2>Tạo key thủ công</h2>
+        Mật khẩu admin: <input type="password" name="password"><br><br>
+        Thời hạn (giờ): <input type="number" name="hours" value="24" min="1"><br><br>
+        <button type="submit">Tạo key</button>
+    </form>
+    '''
+
+# Kiểm tra key (bot gọi vào đây)
+@app.route("/check-key")
 def check_key():
     key = request.args.get("key")
-    if request.is_json:
-        key = request.json.get("key") or key
-
     if not key:
         return jsonify({"valid": False, "message": "Thiếu key"})
 
     info = keys.get(key)
     if info and info["expire"] > time.time():
-        return jsonify({"valid": True, "message": "Key hợp lệ"})
+        remaining = int((info["expire"] - time.time()) / 3600)
+        return jsonify({"valid": True, "remaining_hours": remaining})
     
-    return jsonify({"valid": False, "message": "Key sai hoặc đã hết hạn"})
+    return jsonify({"valid": False, "message": "Key sai hoặc hết hạn"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
